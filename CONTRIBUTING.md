@@ -11,3 +11,5 @@ Build using `build.ps1` as described in the README. It runs counter/unit and sem
 Keep signing keys, local SDKs, build directories, device-specific files, and private credentials out of commits. Publish the signed APK as a GitHub release asset. Keep the original development key locally if issuing compatible updates; a public release should have its own privately managed release key.
 
 Changes should preserve the distinction between telemetry collection time, this app's measured CPU/PSS, and actual gameplay impact. Claims about game FPS or battery impact require measurements on physical hardware.
+
+Dashboard sizing must use the measured usable viewport and actual Android font metrics. Do not reintroduce a fixed minimum height that silently forces scrolling on common landscape screens. Validate 1280 × 960 with densities 240, 280, 320, 360 and 400, including assertions that all eight cards fit without scrolling. Keep an accessible scrolling fallback for genuinely tiny windows. Preserve the GPU replacement choices and their saved preference.

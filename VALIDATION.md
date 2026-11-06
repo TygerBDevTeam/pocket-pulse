@@ -1,4 +1,26 @@
-# Validation — Pocket Pulse 0.2.0
+# Validation — Pocket Pulse 0.2.1
+
+Performed November 6, 2026 (America/Chicago).
+
+## Screen-fit fix and GPU card choices
+
+[Passing Android verification run](https://github.com/TygerBDevTeam/pocket-pulse/actions/runs/42246735301) exercised the release's app sources on Android 16 / API 36. Native captures were downloaded and visually inspected before publication.
+
+- Local JDK 17 / SDK 36 build succeeded, including APK alignment and v2/v3 signatures. Version code 3, version name 0.2.1, minimum API 26, target API 36. The certificate exactly matches the 0.2.0 APK, so installing over 0.2.0 preserves settings without uninstalling.
+- All 52 telemetry and 25 release-version checks passed. The 20 on-Android release-selection checks also passed.
+- Added 25,595 layout checks, including representative short/high-density geometry, preferred normal sizing, row-gap rounding, width bounds, manual opt-out, accessibility sizing and a sweep of window dimensions/densities. These are geometry/property checks, separate from the native screen checks below.
+- **1280 × 960 at density 240, 280, 320, 360 and 400:** every native run explicitly asserted all eight cards and the Internal/microSD labels were present and the dashboard was **not scrollable**. The 320dpi and 400dpi captures were visually inspected for bottom-card content, readable values and footer separation; 240dpi retains the spacious layout.
+- Baseline 960 × 720 at density 200 and Thor-shaped 1240 × 1080 at density 320 also explicitly passed all-eight-cards/no-scroll assertions. Their captures were visually inspected.
+- A small 480 × 360 window correctly retained the readable scrolling fallback; the last card was reachable. Portrait and 1.3× font-size captures were also produced.
+- GPU → Display info selection displayed the actual emulator refresh rate and app-window dimensions, persisted through process restart, then switched successfully to Device uptime and back to GPU activity. No GPU history chart was shown for the replacement card.
+- Existing checks for saved refresh interval, saved thermal/storage selection, Fahrenheit-only readings, mute/unmute, single-display fallback, no idle frames when paused/hidden, and a live GitHub update check passed again.
+- No Pocket Pulse Android crash-log entries were recorded.
+
+The user reports 0.2.0 overflowing slightly on their default 1280 × 960 Nova and fitting their Anbernic 477M. The new build was not physically installed on those handhelds during this session. Automated density-based tests cover the reported resolution without assuming a model-specific DPI. OEM secondary-display switching and hardware sensors retain the limitations below. Extremely small windows or large accessibility fonts may still scroll to protect readability.
+
+The published APK is built locally with the same preserved private key as 0.2.0. Hosted verification uses a separate temporary CI key and receives no private release material. Source archives exclude signing files.
+
+# Historical validation — Pocket Pulse 0.2.0
 
 Performed November 5, 2026 (America/Chicago). Physical handheld compatibility remains to be confirmed.
 

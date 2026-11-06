@@ -1,21 +1,23 @@
 # Pocket Pulse — Android handheld performance monitor
 
-Version **0.2.0**. Lightweight native Java / Android framework only. Android 8.0 (API 26) or newer, targeting API 36. No runtime libraries or account required.
+Version **0.2.1**. Lightweight native Java / Android framework only. Android 8.0 (API 26) or newer, targeting API 36. No runtime libraries or account required.
 
-[Download the latest APK](https://github.com/TygerBDevTeam/pocket-pulse/releases/latest/download/Pocket-Pulse-0.2.0.apk) · [Release notes and downloads](https://github.com/TygerBDevTeam/pocket-pulse/releases)
+[Download the latest APK](https://github.com/TygerBDevTeam/pocket-pulse/releases/latest/download/Pocket-Pulse-0.2.1.apk) · [Release notes and downloads](https://github.com/TygerBDevTeam/pocket-pulse/releases)
 
-**Upgrading from 0.1.0:** the original signing key was unavailable on this computer. Uninstall 0.1.0 once, then install 0.2.0. Your Pocket Pulse settings will reset. Future releases signed with the new, privately retained key can install over 0.2.0 normally.
+**Upgrading from 0.2.0:** install 0.2.1 normally over the existing app; settings are preserved and no uninstall is needed. The same private signing key is used. Only installations still on **0.1.0** need a one-time uninstall because that version's original signing key was unavailable.
 
 ## Dashboard
 
 - Compact top row with **Volume −, Volume +, Mute / Unmute** for Android's media/game audio stream.
 - Eight cards in four columns and two rows when the window is wide enough: CPU, GPU, system RAM, battery, storage, fan speed, battery draw, and this app's own CPU/memory usage at bottom right.
+- **Auto-fit dashboard** is on by default, including upgrades from 0.2.0. Sizing uses the actual usable window, density, system-bar insets and Android font metrics. It preserves full cards where they fit and uses progressively tighter spacing/text, smaller storage rows and hidden charts/secondary notes when needed. Four-column layouts can fit shorter landscape screens instead of forcing four tall rows. Extremely small windows or large accessibility text retain scrolling rather than shrinking text indefinitely. Tap a tight card for its full reading; turn auto-fit off in Options if full cards with scrolling are preferred.
+- **Options → GPU card:** choose GPU activity, Display info (refresh rate and window resolution), or Device uptime (since restart, including sleep). Selection is saved. Display refresh rate is not game FPS.
 - Storage shows **internal and microSD free/total space together**. Options can replace that card with Android thermal status; the choice is saved.
 - **Every displayed temperature is Fahrenheit**, including the copied device report.
 - Small Pocket Pulse label at bottom left, refresh/collection information in the middle, and Live / Paused at bottom right.
 - Options → **Check for updates** checks this repository's published releases, including test builds. A newer release must have a finished APK asset. Download opens in your browser; Android confirms installation. Checks happen only when requested, never automatically or during telemetry polling.
 
-Layouts adapt to 4:3, Thor-shaped landscape lower screens, portrait, split screen, display density, and larger system fonts. Short windows scroll rather than clipping cards. Retroid Pocket Nova with a dual-screen attachment is the user's initial target; AYN Thor and Anbernic DDS are intended targets, not hardware-validated claims.
+Layouts adapt to 4:3, Thor-shaped landscape lower screens, portrait, split screen, display density, and larger system fonts. The 1280 × 960 Nova resolution is included in automated density-based layout checks. The user reports 0.2.0 fitting their Anbernic 477M and overflowing slightly on their default Nova setup; 0.2.1 removes the fixed card minimum responsible for that overflow. Physical-device confirmation of the fix is still required. AYN Thor and Anbernic DDS remain intended targets, not hardware-validated claims.
 
 ## Landscape captures
 
@@ -25,9 +27,11 @@ Actual Android emulator captures. Physical-device readings, fonts/density and av
 | --- | --- |
 | ![4:3 landscape](screenshots/landscape-4-3.png) | ![Thor-shaped lower screen](screenshots/thor-lower-screen.png) |
 
+Additional captures: [1280 × 960 high-density fit](screenshots/nova-1280x960.png) · [Display info replacing GPU](screenshots/display-card.png).
+
 ## Install and choose a display
 
-Download `Pocket-Pulse-0.2.0.apk` from Releases, open it in your handheld's file manager, and allow that file manager to install unknown apps if Android asks. See the one-time signing migration above if 0.1.0 is already installed.
+Download `Pocket-Pulse-0.2.1.apk` from Releases, open it in your handheld's file manager, and allow that file manager to install unknown apps if Android asks. Install over 0.2.0; see the one-time migration above only if 0.1.0 is still installed.
 
 Use the handheld launcher/screen-switch shortcut to open Pocket Pulse on the secondary display, or tap **Display** and choose an accessible display. Android and OEM firmware control whether the move is allowed. Run your game on the other screen. No overlay or background service is required.
 
@@ -53,7 +57,7 @@ A dash means unavailable or waiting for a valid interval. There are no estimated
 - `INTERNET` is for manual HTTPS GitHub release checks only. `MODIFY_AUDIO_SETTINGS` is for media-volume controls. No broad file access, root, account, analytics, ads, overlay, boot receiver, wake lock or background service.
 - Update checks use a separate cancellable thread, timeouts, a bounded response and HTTPS repository-checked download links. They do not block telemetry collection. No credentials or device report are sent.
 
-**Options → About / readings → Copy device report** copies model, Android version, displays, counter sources, storage sources and current readings, with temperatures in °F. Nothing is uploaded. Include this report when reporting device-support issues; exclude serial numbers or account information.
+**Options → About / readings → Copy device report** copies model, Android version, displays, usable window/viewport size, density, font scale, selected layout profile/card size, counter/storage sources and current readings, with temperatures in °F. Nothing is uploaded. Include this report when reporting device-support issues; exclude serial numbers or account information.
 
 ## Build on Windows
 
