@@ -56,7 +56,17 @@ Set-Window '1240x1080' '320'
 Capture 'thor-lower-screen'
 Set-Window '480x360' '160'
 Capture 'compact-window'
-$null = Adb @('shell','input','swipe','240','280','240','100','400')
+$scroll = @((Ui).SelectNodes('//node') | Where-Object { $_.class -eq 'android.widget.ScrollView' }) | Select-Object -First 1
+if (!$scroll -or $scroll.scrollable -ne 'true') { throw 'Compact cards must be scrollable' }
+$bounds = [regex]::Matches($scroll.bounds,'\d+')
+$scrollX = [string]([int](([int]$bounds[0].Value + [int]$bounds[2].Value) / 2))
+$scrollTop = [int]$bounds[1].Value
+$scrollHeight = [int]$bounds[3].Value - $scrollTop
+$scrollStart = [string]([int]($scrollTop + $scrollHeight * 0.8))
+$scrollEnd = [string]([int]($scrollTop + $scrollHeight * 0.2))
+for ($i = 0; $i -lt 8; $i++) { $null = Adb @('shell','input','swipe',$scrollX,$scrollStart,$scrollX,$scrollEnd,'400') }
+$lastCompactCard = @((Ui).SelectNodes('//node') | Where-Object { $_.text -eq 'THIS APP' })
+if ($lastCompactCard.Count -eq 0) { throw 'Could not reach the last compact card' }
 Capture 'compact-window-scrolled'
 Set-Window '720x960' '200'
 Capture 'portrait'
