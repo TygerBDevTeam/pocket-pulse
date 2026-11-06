@@ -5,3 +5,6 @@
 /local.properties
 *.iml
 /.idea/
+*.p12
+*.keystore
+signing-password*.txt

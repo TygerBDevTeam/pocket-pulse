@@ -16,6 +16,8 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.hardware.display.DisplayManager;
+import android.media.AudioManager;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -34,6 +36,10 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.widget.CheckBox;
+import android.widget.Spinner;
+import android.widget.ArrayAdapter;
+import android.widget.AdapterView;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -49,8 +55,16 @@ public final class MainActivity extends Activity {
     private LinearLayout root;
     private GridLayout grid;
     private TextView status, device, footer;
-    private Button intervalButton, pauseButton;
-    private Card cpu, gpu, ram, battery, thermal, self;
+    private Button intervalButton, pauseButton, muteButton;
+    private AudioManager audio;
+    private Card cpu, gpu, ram, battery, optional, fan, power, self;
+    private LinearLayout storageBody;
+    private StorageView internalStorageView, sdStorageView;
+    private boolean showThermal;
+    private UpdateChecker updateChecker;
+    private Thread updateThread;
+    private AlertDialog updateDialog;
+    private int updateToken;
     private Card[] cards;
     private volatile boolean visible, paused, screenOn = true;
     private volatile int generation, interval = 2000;
@@ -74,6 +88,9 @@ public final class MainActivity extends Activity {
         paused = state != null ? state.getBoolean("paused") : getIntent().getBooleanExtra("paused", false);
         keepAwake = preferences.getBoolean("awake", true);
         dim = preferences.getBoolean("dim", false);
+        showThermal = preferences.getBoolean("thermalCard", false);
+        audio = (AudioManager) getSystemService(AUDIO_SERVICE);
+        setVolumeControlStream(AudioManager.STREAM_MUSIC);
         sampler = new TelemetrySampler(this);
         thread = new HandlerThread("PocketPulse-sampler", android.os.Process.THREAD_PRIORITY_BACKGROUND);
         thread.start();
@@ -103,20 +120,25 @@ public final class MainActivity extends Activity {
         root.requestApplyInsets();
 
         LinearLayout heading = row();
-        TextView title = text("POCKET PULSE", 21, TEXT);
-        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        title.setLetterSpacing(.06f);
-        heading.addView(title, new LinearLayout.LayoutParams(0, dp(36), 1));
-        status = text(paused ? "PAUSED" : "● LIVE", 11, TEAL);
-        status.setGravity(Gravity.CENTER);
-        status.setPadding(dp(12), dp(4), dp(12), dp(4));
-        status.setBackground(background(0xFF17322F, 20, 0));
-        heading.addView(status, new LinearLayout.LayoutParams(-2, dp(28)));
-        root.addView(heading);
         device = text(Build.MANUFACTURER + " " + Build.MODEL, 12, MUTED);
         device.setSingleLine(true);
         device.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        root.addView(device, new LinearLayout.LayoutParams(-1, dp(24)));
+        heading.addView(device, new LinearLayout.LayoutParams(0, dp(48), 1));
+        LinearLayout volume = row();
+        Button lower = button("Volume −", () -> adjustVolume(AudioManager.ADJUST_LOWER));
+        Button raise = button("Volume +", () -> adjustVolume(AudioManager.ADJUST_RAISE));
+        muteButton = button("Mute", () -> adjustVolume(AudioManager.ADJUST_TOGGLE_MUTE));
+        lower.setContentDescription("Media volume down"); raise.setContentDescription("Media volume up");
+        Button[] volumeButtons = {lower, raise, muteButton};
+        for (int i = 0; i < volumeButtons.length; i++) {
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(44), 1);
+            if (i > 0) params.setMarginStart(dp(6));
+            volume.addView(volumeButtons[i], params);
+        }
+        LinearLayout.LayoutParams volumeParams = new LinearLayout.LayoutParams(0, dp(48), 1);
+        volumeParams.setMarginStart(dp(6));
+        heading.addView(volume, volumeParams);
+        root.addView(heading);
 
         LinearLayout controls = row();
         intervalButton = button("2s refresh", this::chooseInterval);
@@ -148,34 +170,58 @@ public final class MainActivity extends Activity {
         gpu = new Card("GPU", PURPLE, true);
         ram = new Card("SYSTEM RAM", TEAL, true);
         battery = new Card("BATTERY", 0xFFE5D38D, false);
-        thermal = new Card("THERMAL STATUS", 0xFF95C4F2, false);
+        optional = new Card("STORAGE", 0xFF95C4F2, false);
+        storageBody = new LinearLayout(this);
+        storageBody.setOrientation(LinearLayout.VERTICAL);
+        internalStorageView = new StorageView("Internal");
+        sdStorageView = new StorageView("microSD");
+        storageBody.addView(internalStorageView);
+        View divider = new View(this);
+        divider.setBackgroundColor(0xFF253140);
+        LinearLayout.LayoutParams dividerParams = new LinearLayout.LayoutParams(-1, dp(1));
+        dividerParams.topMargin = dp(5); dividerParams.bottomMargin = dp(5);
+        storageBody.addView(divider, dividerParams);
+        storageBody.addView(sdStorageView);
+        optional.addView(storageBody);
+        fan = new Card("FAN SPEED", 0xFF95C4F2, false);
+        power = new Card("BATTERY DRAW", 0xFFE5D38D, false);
         self = new Card("THIS APP", MUTED, false);
-        cards = new Card[]{cpu, gpu, ram, battery, thermal, self};
+        cards = new Card[]{cpu, gpu, ram, battery, optional, fan, power, self};
         for (Card card : cards) grid.addView(card);
         cpu.set("—", "Checking availability", "System utilization");
         gpu.set("—", "Checking availability", "System utilization");
         ram.set("—", "System memory", "Used / total");
         battery.set("—", "Battery temperature", "Waiting for first sample");
-        thermal.set("—", "Android thermal status", "Waiting for first sample");
+        optional.set("—", "Android thermal status", "Waiting for first sample");
+        fan.set("—", "Checking fan RPM", "Device support varies");
+        power.set("—", "Battery power", "Checking current + voltage");
         self.set("—", "Pocket Pulse overhead", "Waiting for first sample");
-        footer = text("Local only · No ads · No background service", 11, MUTED);
+        LinearLayout footerRow = row();
+        footerRow.addView(text("Pocket Pulse", 11, MUTED), new LinearLayout.LayoutParams(-2, -1));
+        footer = text("Waiting for readings", 11, MUTED);
         footer.setGravity(Gravity.CENTER);
-        root.addView(footer, new LinearLayout.LayoutParams(-1, dp(30)));
+        footer.setMaxLines(2);
+        footerRow.addView(footer, new LinearLayout.LayoutParams(0, -1, 1));
+        status = text(paused ? "Paused" : "● Live", 11, TEAL);
+        status.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        footerRow.addView(status, new LinearLayout.LayoutParams(-2, -1));
+        root.addView(footerRow, new LinearLayout.LayoutParams(-1, dp(34)));
         root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> arrangeCards());
+        updateOptionalCard();
         updateControls();
     }
 
     private void arrangeCards() {
         int width = root.getWidth() - root.getPaddingLeft() - root.getPaddingRight();
         if (width <= 0) return;
-        int nextColumns = width >= dp(540) ? 3 : width >= dp(290) ? 2 : 1;
+        float fontScale = Math.max(1f, getResources().getConfiguration().fontScale);
+        int nextColumns = width >= dp(560 * fontScale) ? 4 : width >= dp(290 * fontScale) ? 2 : 1;
         int viewport = ((View) grid.getParent()).getHeight();
         if (viewport <= 0) return;
-        float fontScale = Math.max(1f, getResources().getConfiguration().fontScale);
         int rows = (cards.length + nextColumns - 1) / nextColumns;
         int rowSpace = viewport / rows - dp(10);
-        boolean nextCompact = preferences.getBoolean("compact", false) || rowSpace < dp(145 * fontScale);
-        int nextHeight = Math.max(dp(110 * fontScale), Math.min(dp((nextCompact ? 133 : 184) * fontScale), rowSpace));
+        boolean nextCompact = preferences.getBoolean("compact", false) || rowSpace < dp(170 * fontScale);
+        int nextHeight = Math.max(dp((nextCompact ? 155 : 165) * fontScale), rowSpace);
         if (columns == nextColumns && compact == nextCompact && arrangedCardHeight == nextHeight) return;
         columns = nextColumns;
         compact = nextCompact;
@@ -186,13 +232,15 @@ public final class MainActivity extends Activity {
         for (int i = 0; i < cards.length; i++) {
             Card card = cards[i];
             card.chart.setVisibility(card.hasChart && !compact ? View.VISIBLE : View.GONE);
-            card.value.setTextSize(compact ? 25 : 31);
+            card.value.setTextSize(card == self ? (compact ? 20 : 25) : (compact ? 25 : 31));
             GridLayout.LayoutParams params = new GridLayout.LayoutParams(GridLayout.spec(i / columns), GridLayout.spec(i % columns, 1f));
             params.width = 0;
             params.height = nextHeight;
             params.setMargins(i % columns == 0 ? 0 : dp(5), 0, i % columns == columns - 1 ? 0 : dp(5), dp(10));
             grid.addView(card, params);
         }
+        internalStorageView.number.setTextSize(compact ? 20 : 24);
+        sdStorageView.number.setTextSize(compact ? 20 : 24);
     }
 
     @Override protected void onStart() {
@@ -204,12 +252,14 @@ public final class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(screenReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
         else registerReceiver(screenReceiver, filter);
         updateDeviceLabel();
+        updateVolumeButton();
         restartSampling(true);
     }
     // A game on another display can pause this Activity while it stays visible.
     // Stop sampling onStop, not onPause, so the lower screen keeps updating.
     @Override protected void onStop() {
         visible = false;
+        cancelUpdate();
         unregisterReceiver(screenReceiver);
         generation++;
         worker.removeCallbacksAndMessages(null);
@@ -217,6 +267,7 @@ public final class MainActivity extends Activity {
         super.onStop();
     }
     @Override protected void onDestroy() {
+        cancelUpdate();
         generation++;
         worker.removeCallbacksAndMessages(null);
         main.removeCallbacksAndMessages(null);
@@ -266,20 +317,43 @@ public final class MainActivity extends Activity {
         cpu.set(percent(s.cpu), s.cpuClock, s.cpuReadable ? "System load · all cores" : "Usage restricted by Android");
         gpu.set(percent(s.gpu), s.gpuClock, s.gpuReadable ? "Device GPU activity" : "Usage not exposed by device");
         ram.set(percent(s.ram), f("%.1f / %.1f GiB used", (s.totalRam - s.availableRam) / 1073741824.0, s.totalRam / 1073741824.0), f("%.1f GiB available", s.availableRam / 1073741824.0));
-        battery.set(s.battery >= 0 ? s.battery + "%" : "—", Float.isFinite(s.batteryC) ? f("%.1f °C · battery", s.batteryC) : "Temperature unavailable", s.charging ? "Charging / external power" : "On battery");
-        String[] thermalNames = {"None", "Light", "Moderate", "Severe", "Critical", "Emergency", "Shutdown"};
-        thermal.set(s.thermal >= 0 && s.thermal < thermalNames.length ? thermalNames[s.thermal] : "—", s.thermal >= 0 ? "Throttling severity reported" : "Requires Android 10+", "Firmware report · not CPU °C");
-        thermal.value.setTextColor(s.thermal >= 3 ? CORAL : 0xFF95C4F2);
+        battery.set(s.battery >= 0 ? s.battery + "%" : "—", Float.isFinite(s.batteryF) ? f("%.1f °F · battery", s.batteryF) : "Temperature unavailable", s.charging ? "Charging / external power" : "On battery");
+        renderOptional(s);
+        fan.set(Float.isFinite(s.fanRpm) ? f("%.0f RPM", s.fanRpm) : "—", Float.isFinite(s.fanRpm) ? "Measured fan speed" : "RPM unavailable", "Requires readable fan sensor");
+        power.set(Float.isFinite(s.batteryWatts) ? f("%.1f W", Math.abs(s.batteryWatts)) : "—",
+                Float.isFinite(s.batteryWatts) ? (s.batteryWatts > 0 ? "Charging · into battery" : s.batteryWatts < 0 ? "Discharging · battery" : "No net battery current") : "Power unavailable",
+                "Net battery power · not wall draw");
+        power.title.setText(Float.isFinite(s.batteryWatts) && s.batteryWatts > 0 ? "BATTERY CHARGE" : "BATTERY DRAW");
+        updateVolumeButton();
         self.set(Float.isFinite(s.selfCpu) ? f("%.1f%% CPU", s.selfCpu) : "Warming up", f("%.1f MiB RAM · PSS", s.appPssKb / 1024.0), "CPU relative to one core");
-        self.value.setTextSize(compact ? 22 : 27);
         cpu.chart.add(s.cpu); gpu.chart.add(s.gpu); ram.chart.add(s.ram);
         footer.setText(f("%ds refresh · %.1f ms to collect · 90-sample history", interval / 1000, s.collectionMs));
+    }
+
+    private void renderOptional(TelemetrySampler.Sample s) {
+        if (!showThermal) {
+            internalStorageView.set(s.internalStorage, "Space unavailable");
+            sdStorageView.set(s.sdStorage, s.sdStatus);
+            return;
+        }
+        String[] thermalNames = {"None", "Light", "Moderate", "Severe", "Critical", "Emergency", "Shutdown"};
+        optional.set(s.thermal >= 0 && s.thermal < thermalNames.length ? thermalNames[s.thermal] : "—", s.thermal >= 0 ? "Throttling severity reported" : "Requires Android 10+", "Firmware report · not CPU °F");
+        optional.value.setTextColor(s.thermal >= 3 ? CORAL : 0xFF95C4F2);
+    }
+
+    private void updateOptionalCard() {
+        optional.title.setText(showThermal ? "THERMAL STATUS" : "STORAGE");
+        optional.value.setVisibility(showThermal ? View.VISIBLE : View.GONE);
+        optional.detail.setVisibility(showThermal ? View.VISIBLE : View.GONE);
+        optional.note.setVisibility(showThermal ? View.VISIBLE : View.GONE);
+        storageBody.setVisibility(showThermal ? View.GONE : View.VISIBLE);
+        if (last != null) renderOptional(last);
     }
 
     private void updateControls() {
         intervalButton.setText(interval / 1000 + "s refresh");
         pauseButton.setText(paused ? "Resume" : "Pause");
-        status.setText(paused ? "PAUSED" : "● LIVE");
+        status.setText(paused ? "Paused" : "● Live");
         status.setTextColor(paused ? MUTED : TEAL);
         if (paused) footer.setText("Paused · Readings frozen · Sampling stopped");
     }
@@ -333,14 +407,131 @@ public final class MainActivity extends Activity {
     }
 
     private void showOptions() {
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(20), dp(4), dp(20), dp(8));
         String[] labels = {"Keep this screen awake", "Dim this screen to 25%", "Compact cards"};
         boolean[] checked = {keepAwake, dim, preferences.getBoolean("compact", false)};
-        new AlertDialog.Builder(this).setTitle("Pocket Pulse").setMultiChoiceItems(labels, checked, (dialog, which, value) -> {
-            if (which == 0) { keepAwake = value; preferences.edit().putBoolean("awake", value).apply(); }
-            if (which == 1) { dim = value; preferences.edit().putBoolean("dim", value).apply(); }
-            if (which == 2) { preferences.edit().putBoolean("compact", value).apply(); columns = -1; arrangeCards(); }
-            applyScreenOptions();
-        }).setPositiveButton("Done", null).setNeutralButton("About / readings", (dialog, which) -> showAbout()).show();
+        for (int i = 0; i < labels.length; i++) {
+            final int setting = i;
+            CheckBox check = new CheckBox(this);
+            check.setText(labels[i]); check.setTextColor(TEXT); check.setTextSize(14);
+            check.setMinHeight(dp(44)); check.setChecked(checked[i]);
+            check.setOnCheckedChangeListener((view, value) -> {
+                if (setting == 0) { keepAwake = value; preferences.edit().putBoolean("awake", value).apply(); }
+                if (setting == 1) { dim = value; preferences.edit().putBoolean("dim", value).apply(); }
+                if (setting == 2) { preferences.edit().putBoolean("compact", value).apply(); columns = -1; arrangeCards(); }
+                applyScreenOptions();
+            });
+            panel.addView(check);
+        }
+        panel.addView(text("Bottom-left card", 12, MUTED));
+        Spinner choice = new Spinner(this);
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, new String[]{"Storage", "Thermal status"});
+        choice.setAdapter(adapter); choice.setSelection(showThermal ? 1 : 0);
+        panel.addView(choice, new LinearLayout.LayoutParams(-1, dp(44)));
+        choice.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                showThermal = position == 1;
+                preferences.edit().putBoolean("thermalCard", showThermal).apply();
+                updateOptionalCard();
+            }
+            @Override public void onNothingSelected(AdapterView<?> parent) {}
+        });
+        panel.addView(text("Temperature units · Fahrenheit (°F)", 11, MUTED), new LinearLayout.LayoutParams(-1, dp(28)));
+        Button update = button("Check for updates", () -> {});
+        panel.addView(update, new LinearLayout.LayoutParams(-1, dp(48)));
+        panel.addView(text("GitHub Releases · Installed " + versionName(), 11, MUTED), new LinearLayout.LayoutParams(-1, dp(26)));
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(panel);
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Options").setView(scroll)
+                .setPositiveButton("Done", null).setNeutralButton("About / readings", (d, which) -> showAbout()).create();
+        update.setOnClickListener(v -> { dialog.dismiss(); checkForUpdates(); });
+        dialog.show();
+    }
+
+    private void adjustVolume(int direction) {
+        try {
+            if (audio.isVolumeFixed()) { Toast.makeText(this, "This audio output has fixed volume", Toast.LENGTH_SHORT).show(); return; }
+            audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, direction, AudioManager.FLAG_SHOW_UI);
+            updateVolumeButton();
+        } catch (RuntimeException e) { Toast.makeText(this, "Android did not allow this volume change", Toast.LENGTH_SHORT).show(); }
+    }
+
+    private void updateVolumeButton() {
+        try {
+            boolean muted = audio.isStreamMute(AudioManager.STREAM_MUSIC);
+            muteButton.setText(muted ? "Unmute" : "Mute");
+            muteButton.setTextColor(muted ? TEAL : TEXT);
+            muteButton.setContentDescription(muted ? "Unmute media audio" : "Mute media audio");
+        } catch (RuntimeException ignored) { muteButton.setText("Mute"); }
+    }
+
+    private String versionName() {
+        try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionName; }
+        catch (Exception ignored) { return "0.2.0"; }
+    }
+
+    private void checkForUpdates() {
+        cancelUpdate();
+        final int token = ++updateToken;
+        final UpdateChecker checker = new UpdateChecker();
+        updateChecker = checker;
+        final String installed = versionName();
+        updateDialog = new AlertDialog.Builder(this).setTitle("Check for updates")
+                .setMessage("Checking published GitHub releases…")
+                .setNegativeButton("Cancel", (dialog, which) -> cancelUpdate()).create();
+        updateDialog.setOnCancelListener(dialog -> cancelUpdate());
+        updateDialog.show();
+        updateThread = new Thread(() -> {
+            try {
+                UpdateChecker.Release release = checker.check(installed);
+                main.post(() -> {
+                    if (!visible || isFinishing() || token != updateToken) return;
+                    finishUpdateDialog();
+                    if (release == null) {
+                        new AlertDialog.Builder(this).setTitle("No newer APK found")
+                                .setMessage("Installed: " + installed + "\n\nNo newer published APK is available. Checks include test releases.")
+                                .setPositiveButton("OK", null).setNeutralButton("Open GitHub", (d, w) -> openUrl(UpdateChecker.REPOSITORY + "/releases")).show();
+                    } else {
+                        String message = "Installed: " + installed + "\nAvailable: " + release.tag
+                                + (release.prerelease ? " · test release" : "")
+                                + "\n\nDownload the APK, then open it to install. Android will ask you to confirm."
+                                + (release.notes.isEmpty() ? "" : "\n\n" + release.notes);
+                        new AlertDialog.Builder(this).setTitle("Update available").setMessage(message)
+                                .setPositiveButton("Download APK", (d, w) -> openUrl(release.apk))
+                                .setNeutralButton("Release notes", (d, w) -> openUrl(release.page)).setNegativeButton("Later", null).show();
+                    }
+                });
+            } catch (Exception e) {
+                main.post(() -> {
+                    if (!visible || isFinishing() || token != updateToken) return;
+                    finishUpdateDialog();
+                    new AlertDialog.Builder(this).setTitle("Could not check for updates")
+                            .setMessage("Check your connection and try again. You can also open the GitHub releases page.")
+                            .setPositiveButton("Retry", (d, w) -> checkForUpdates())
+                            .setNeutralButton("Open GitHub", (d, w) -> openUrl(UpdateChecker.REPOSITORY + "/releases")).setNegativeButton("Close", null).show();
+                });
+            }
+        }, "PocketPulse-update-check");
+        updateThread.start();
+    }
+
+    private void finishUpdateDialog() {
+        updateChecker = null; updateThread = null;
+        if (updateDialog != null) { updateDialog.dismiss(); updateDialog = null; }
+    }
+
+    private void cancelUpdate() {
+        ++updateToken;
+        if (updateChecker != null) updateChecker.cancel();
+        if (updateThread != null) updateThread.interrupt();
+        finishUpdateDialog();
+    }
+
+    private void openUrl(String url) {
+        try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); }
+        catch (RuntimeException e) { Toast.makeText(this, "No browser is available to open GitHub", Toast.LENGTH_LONG).show(); }
     }
 
     private void applyScreenOptions() {
@@ -352,13 +543,15 @@ public final class MainActivity extends Activity {
     }
 
     private void showAbout() {
-        new AlertDialog.Builder(this).setTitle("Pocket Pulse · 0.1.0").setMessage(
+        new AlertDialog.Builder(this).setTitle("Pocket Pulse · " + versionName()).setMessage(
             "A quiet dashboard for a second screen.\n\n" +
             "CPU and GPU: system-wide readings only where firmware permits them. A dash means unavailable or waiting for a valid sample; clocks are not utilization.\n\n" +
             "RAM: total minus Android’s available memory. Includes the system, games, apps, and some cache; it is not a game’s RAM allocation.\n\n" +
-            "Thermals: Android’s reported severity, not a chip thermometer. ‘None’ means no throttling reported; firmware support varies. Battery °C is not CPU/GPU temperature.\n\n" +
+            "All temperatures use Fahrenheit. Battery °F is not CPU/GPU temperature. Optional thermals show Android’s reported severity, not a chip thermometer. ‘None’ means no severity reported; firmware support varies.\n\n" +
+            "Storage: free and total usable space for internal storage and a mounted microSD. Updated every 15 seconds. Adopted storage can be included in internal space.\n\n" +
+            "Fan speed: actual RPM only when readable; not fan mode or PWM. Battery power is current × voltage: net charging/discharging power at the battery, not wall power or a game’s individual power use.\n\n" +
             "This app: CPU relative to one core, and process PSS sampled every 15 seconds. Collection time covers telemetry reads, not drawing or total game impact.\n\n" +
-            "No root, network permission, telemetry, ads, overlay, boot task, wake lock, or background service. Reads stop when hidden, paused, or the screen turns off.\n\n" +
+            "Media volume buttons control Android’s music/game audio stream. Network access is used only for manual GitHub update checks. No root, analytics, ads, overlay, boot task, wake lock, or background service. Reads stop when hidden, paused, or the screen turns off.\n\n" +
             "Move the app to the lower display, then open your game above. The display picker depends on firmware. Game FPS and per-game CPU/GPU/RAM are not available in this no-setup version."
         ).setPositiveButton("Close", null).setNeutralButton("Copy device report", (dialog, which) -> {
             ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
@@ -368,11 +561,19 @@ public final class MainActivity extends Activity {
     }
 
     private String deviceReport() {
-        String report = "Pocket Pulse 0.1.0\nDevice: " + Build.MANUFACTURER + " " + Build.MODEL + "\nAndroid: " + Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")\nRefresh: " + interval + " ms\n";
+        String report = "Pocket Pulse " + versionName() + "\nDevice: " + Build.MANUFACTURER + " " + Build.MODEL + "\nAndroid: " + Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")\nRefresh: " + interval + " ms\n";
         DisplayManager manager = (DisplayManager) getSystemService(DISPLAY_SERVICE);
         for (Display display : manager.getDisplays()) report += "Display " + display.getDisplayId() + ": " + display.getName() + "\n";
         if (last != null) report += "CPU source: " + last.cpuSource + "\nCPU load: " + percent(last.cpu) + "\nCPU clock: " + last.cpuClock + "\nGPU source: " + last.gpuSource + "\nGPU load: " + percent(last.gpu) + "\nGPU clock: " + last.gpuClock + "\nRAM used: " + percent(last.ram) + "\nThermal status: " + last.thermal + "\nApp PSS: " + last.appPssKb + " KiB\nApp CPU: " + last.selfCpu + "% of one core\n";
+        if (last != null) report += "Battery temperature: " + (Float.isFinite(last.batteryF) ? f("%.1f °F", last.batteryF) : "Unavailable")
+                + "\nBattery net power: " + (Float.isFinite(last.batteryWatts) ? f("%.2f W (positive = charging)", last.batteryWatts) : "Unavailable")
+                + "\nFan: " + (Float.isFinite(last.fanRpm) ? f("%.0f RPM", last.fanRpm) : "Unavailable") + "\nFan source: " + last.fanSource
+                + "\nInternal storage: " + storageReport(last.internalStorage) + "\nmicroSD: " + (last.sdStorage == null ? last.sdStatus : storageReport(last.sdStorage)) + "\n";
         return report;
+    }
+
+    private String storageReport(TelemetrySampler.StorageReading reading) {
+        return reading == null ? "Unavailable" : f("%.1f / %.1f GiB free; source: %s", reading.available / 1073741824.0, reading.total / 1073741824.0, reading.source);
     }
 
     private void updateDeviceLabel() {
@@ -380,7 +581,7 @@ public final class MainActivity extends Activity {
         device.setText(Build.MODEL + "  ·  Display " + display.getDisplayId() + "  ·  Android " + Build.VERSION.RELEASE);
     }
     private final class Card extends LinearLayout {
-        final TextView value, detail, note;
+        final TextView title, value, detail, note;
         final Sparkline chart;
         final boolean hasChart;
         Card(String label, int color, boolean hasChart) {
@@ -389,7 +590,7 @@ public final class MainActivity extends Activity {
             setOrientation(VERTICAL);
             setPadding(dp(13), dp(12), dp(13), dp(10));
             setBackground(background(CARD, 16, 0xFF253140));
-            TextView title = text(label, 10, color);
+            title = text(label, 10, color);
             title.setLetterSpacing(.09f);
             title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
             addView(title);
@@ -414,6 +615,26 @@ public final class MainActivity extends Activity {
         }
         void set(String number, String detailText, String noteText) {
             value.setText(number); detail.setText(detailText); note.setText(noteText);
+        }
+    }
+
+    private final class StorageView extends LinearLayout {
+        final TextView number, capacity;
+        StorageView(String label) {
+            super(MainActivity.this);
+            setOrientation(VERTICAL);
+            addView(text(label, 11, TEXT));
+            number = text("—", 24, 0xFF95C4F2);
+            number.setSingleLine(true);
+            number.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            addView(number);
+            capacity = text("Waiting for reading", 10, MUTED);
+            capacity.setMaxLines(2);
+            addView(capacity);
+        }
+        void set(TelemetrySampler.StorageReading reading, String unavailable) {
+            number.setText(reading == null ? "—" : f("%.0f GiB", reading.available / 1073741824.0));
+            capacity.setText(reading == null ? unavailable : f("free of %.0f GiB", reading.total / 1073741824.0));
         }
     }
 

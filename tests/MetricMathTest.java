@@ -41,6 +41,25 @@ public final class MetricMathTest {
         close(MetricMath.processCpu(4, 2000), .2f);
         close(MetricMath.processCpu(200, 100), 200); // One-core normalization can exceed 100%.
         missing(MetricMath.processCpu(1, 0));
+        close(MetricMath.fahrenheit(0), 32);
+        close(MetricMath.fahrenheit(34.2f), 93.56f);
+        close(MetricMath.fahrenheit(-40), -40);
+        missing(MetricMath.fahrenheit(Float.NaN));
+        missing(MetricMath.fahrenheit(Float.POSITIVE_INFINITY));
+        close(MetricMath.batteryWatts(-1700000, 4000), -6.8f);
+        close(MetricMath.batteryWatts(2000000, 4200), 8.4f);
+        close(MetricMath.batteryWatts(0, 4000), 0);
+        missing(MetricMath.batteryWatts(Integer.MIN_VALUE, 4000));
+        missing(MetricMath.batteryWatts(1000000, -1));
+        missing(MetricMath.batteryWatts(1000000, 0));
+        close(MetricMath.rpm("0"), 0);
+        close(MetricMath.rpm("4500\n"), 4500);
+        missing(MetricMath.rpm(null));
+        missing(MetricMath.rpm("NaN"));
+        missing(MetricMath.rpm("Infinity"));
+        missing(MetricMath.rpm("-1"));
+        missing(MetricMath.rpm("1 2"));
+        missing(MetricMath.rpm("100001"));
         MetricMath.History history = new MetricMath.History(3);
         history.add(1); history.add(2); history.add(Float.NaN); history.add(4);
         check(history.size() == 3);

@@ -52,6 +52,24 @@ public final class MetricMath {
         return wallMs <= 0 || cpuMs < 0 ? Float.NaN : 100f * cpuMs / wallMs;
     }
 
+    public static float fahrenheit(float celsius) {
+        return Float.isFinite(celsius) ? celsius * 1.8f + 32f : Float.NaN;
+    }
+
+    /** Android reports microamps and millivolts; positive power means charging. */
+    public static float batteryWatts(int microamps, int millivolts) {
+        if (microamps == Integer.MIN_VALUE || millivolts <= 0 || millivolts > 30000) return Float.NaN;
+        return (float) (microamps * (double) millivolts / 1_000_000_000.0);
+    }
+
+    public static float rpm(String value) {
+        if (value == null) return Float.NaN;
+        try {
+            float rpm = Float.parseFloat(value.trim());
+            return Float.isFinite(rpm) && rpm >= 0 && rpm <= 100000 ? rpm : Float.NaN;
+        } catch (NumberFormatException e) { return Float.NaN; }
+    }
+
     public static final class History {
         private final float[] values;
         private int next, size;

@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.pocketpulse.monitor" android:versionCode="1" android:versionName="0.1.0">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.pocketpulse.monitor" android:versionCode="2" android:versionName="0.2.0">
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="36" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
-    <application android:label="Pocket Pulse" android:icon="@drawable/ic_launcher" android:theme="@style/AppTheme" android:allowBackup="false" android:supportsRtl="true" android:resizeableActivity="true">
+    <application android:label="Pocket Pulse" android:icon="@drawable/ic_launcher" android:theme="@style/AppTheme" android:allowBackup="false" android:usesCleartextTraffic="false" android:supportsRtl="true" android:resizeableActivity="true">
         <activity android:name=".MainActivity" android:exported="true" android:resizeableActivity="true" android:launchMode="standard" android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden" >
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

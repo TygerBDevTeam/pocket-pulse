@@ -27,12 +27,12 @@ function Click-Text([string]$Text) {
 }
 $null = Invoke-Adb @('shell','am','start','-W','-n','dev.pocketpulse.monitor/.MainActivity')
 $ui = Get-Ui
-foreach ($label in @('CPU','GPU','SYSTEM RAM','BATTERY','THERMAL STATUS','THIS APP')) {
+foreach ($label in @('CPU','GPU','SYSTEM RAM','BATTERY','STORAGE','FAN SPEED','THIS APP','Internal','microSD','Volume −','Volume +')) {
     if (!(Find-Text $ui $label)) { throw ('Missing metric card: ' + $label) }
 }
-Write-Output 'PASS: All six metric cards present'
+Write-Output 'PASS: Eight-card dashboard and volume controls present'
 Click-Text 'Pause'
-Expect-Text 'PAUSED'
+Expect-Text 'Paused'
 Expect-Text 'Resume'
 $null = Invoke-Adb @('shell','dumpsys','gfxinfo','dev.pocketpulse.monitor','reset')
 Start-Sleep -Seconds 5
@@ -57,7 +57,30 @@ Click-Text 'Options'
 Expect-Text 'Keep this screen awake'
 Expect-Text 'Dim this screen to 25%'
 Expect-Text 'Compact cards'
+Expect-Text 'Check for updates'
+Expect-Text 'Temperature units · Fahrenheit (°F)'
+Click-Text 'Storage'
+Click-Text 'Thermal status'
 Click-Text 'Done'
+Expect-Text 'THERMAL STATUS'
+$null = Invoke-Adb @('shell','am','force-stop','dev.pocketpulse.monitor')
+$null = Invoke-Adb @('shell','am','start','-W','-n','dev.pocketpulse.monitor/.MainActivity')
+Expect-Text 'THERMAL STATUS'
+Click-Text 'Options'
+Click-Text 'Thermal status'
+Click-Text 'Storage'
+Click-Text 'Done'
+Expect-Text 'STORAGE'
+$ui = Get-Ui
+if (($ui.OuterXml -match '°C') -or ($ui.OuterXml -notmatch '°F')) { throw 'Expected Fahrenheit-only readings' }
+Write-Output 'PASS: Optional card setting persists and temperatures use Fahrenheit'
+Click-Text 'Mute'
+Start-Sleep -Seconds 1
+Expect-Text 'Unmute'
+Click-Text 'Unmute'
+Start-Sleep -Seconds 1
+Expect-Text 'Mute'
+Write-Output 'PASS: Media mute/unmute controls'
 $null = Invoke-Adb @('shell','input','keyevent','3')
 Start-Sleep -Seconds 1
 $null = Invoke-Adb @('shell','dumpsys','gfxinfo','dev.pocketpulse.monitor','reset')
