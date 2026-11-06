@@ -13,11 +13,11 @@ Performed November 5, 2026 (America/Chicago). Physical handheld compatibility re
 
 ## Android runtime and layout checks
 
-[Successful GitHub verification run](https://github.com/TygerBDevTeam/pocket-pulse/actions/runs/42157272523) built the same app sources on Ubuntu and ran an accelerated Android 16 / API 36 x86_64 emulator. CI generates its own temporary test key; the public release APK is independently built/signed on Windows with the preserved private release key. No private release material is sent to CI.
+[Successful GitHub verification run](https://github.com/TygerBDevTeam/pocket-pulse/actions/runs/42158102193) built the same app sources on Ubuntu and ran an accelerated Android 16 / API 36 x86_64 emulator. CI generates its own temporary test key; the public release APK is independently built/signed on Windows with the preserved private release key. No private release material is sent to CI.
 
 - Installed and cold-launched successfully; eight-card dashboard and three volume controls found.
 - Inspected actual captures at **960 × 720, density 200 (4:3)** and **1240 × 1080, density 320 (Thor-shaped lower-screen window)**. Both landscape layouts fit all eight cards, with this app's usage at bottom right. Shorter layouts use compact cards and can hide charts.
-- Captured a 480 × 360 compact window, 720 × 960 portrait window and 1.3× font scale. The app provides a scrollable grid for constrained windows; physical touch/controller behavior still requires handheld testing.
+- Captured a 480 × 360 compact window, 720 × 960 portrait window and 1.3× font scale. Verified compact-window scrolling reaches the last card, then inspected the scrolled capture. Physical touch/controller behavior still requires handheld testing.
 - Verified pause/resume; zero app frames drawn during a five-second manual pause and during a five-second period hidden behind the launcher. This checks redraw behavior, not zero CPU cost.
 - Changed refresh 2 → 5 seconds; verified persistence through process restart; restored 2 seconds.
 - Verified single-display fallback and Options controls. Switched Storage → Thermal status, confirmed persistence after process restart, and restored Storage.
