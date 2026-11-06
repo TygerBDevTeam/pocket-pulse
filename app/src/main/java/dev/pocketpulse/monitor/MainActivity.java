@@ -24,6 +24,7 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.os.SystemClock;
 import android.view.Display;
 import android.view.Gravity;
 import android.view.View;
@@ -53,14 +54,20 @@ public final class MainActivity extends Activity {
     private TelemetrySampler.Sample last;
     private SharedPreferences preferences;
     private LinearLayout root;
+    private LinearLayout headingRow, footerPanel;
+    private int chromeHeight = -1;
     private GridLayout grid;
+    private ScrollView dashboardScroll;
     private TextView status, device, footer;
     private Button intervalButton, pauseButton, muteButton;
     private AudioManager audio;
     private Card cpu, gpu, ram, battery, optional, fan, power, self;
     private LinearLayout storageBody;
+    private View storageDivider;
+    private TextView storageHint;
     private StorageView internalStorageView, sdStorageView;
     private boolean showThermal;
+    private int gpuCardMode;
     private UpdateChecker updateChecker;
     private Thread updateThread;
     private AlertDialog updateDialog;
@@ -71,6 +78,8 @@ public final class MainActivity extends Activity {
     private boolean compact, keepAwake = true, dim;
     private int columns = -1;
     private int arrangedCardHeight = -1;
+    private String arrangedGeometry;
+    private DashboardLayout dashboardLayout;
     private final BroadcastReceiver screenReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             screenOn = !Intent.ACTION_SCREEN_OFF.equals(intent.getAction());
@@ -89,6 +98,8 @@ public final class MainActivity extends Activity {
         keepAwake = preferences.getBoolean("awake", true);
         dim = preferences.getBoolean("dim", false);
         showThermal = preferences.getBoolean("thermalCard", false);
+        gpuCardMode = preferences.getInt("gpuCard", 0);
+        if (gpuCardMode < 0 || gpuCardMode > 2) gpuCardMode = 0;
         audio = (AudioManager) getSystemService(AUDIO_SERVICE);
         setVolumeControlStream(AudioManager.STREAM_MUSIC);
         sampler = new TelemetrySampler(this);
@@ -120,6 +131,7 @@ public final class MainActivity extends Activity {
         root.requestApplyInsets();
 
         LinearLayout heading = row();
+        headingRow = heading;
         device = text(Build.MANUFACTURER + " " + Build.MODEL, 12, MUTED);
         device.setSingleLine(true);
         device.setEllipsize(android.text.TextUtils.TruncateAt.END);
@@ -160,12 +172,14 @@ public final class MainActivity extends Activity {
         root.addView(controls, controlParams);
 
         ScrollView scroll = new ScrollView(this);
+        dashboardScroll = scroll;
         scroll.setFillViewport(false);
         scroll.setClipToPadding(false);
         grid = new GridLayout(this);
         grid.setAlignmentMode(GridLayout.ALIGN_BOUNDS);
         scroll.addView(grid, new ScrollView.LayoutParams(-1, -2));
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        scroll.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> arrangeCards());
         cpu = new Card("CPU", CORAL, true);
         gpu = new Card("GPU", PURPLE, true);
         ram = new Card("SYSTEM RAM", TEAL, true);
@@ -173,10 +187,14 @@ public final class MainActivity extends Activity {
         optional = new Card("STORAGE", 0xFF95C4F2, false);
         storageBody = new LinearLayout(this);
         storageBody.setOrientation(LinearLayout.VERTICAL);
+        storageHint = text("Free / total", 10, MUTED);
+        storageHint.setVisibility(View.GONE);
+        storageBody.addView(storageHint);
         internalStorageView = new StorageView("Internal");
         sdStorageView = new StorageView("microSD");
         storageBody.addView(internalStorageView);
         View divider = new View(this);
+        storageDivider = divider;
         divider.setBackgroundColor(0xFF253140);
         LinearLayout.LayoutParams dividerParams = new LinearLayout.LayoutParams(-1, dp(1));
         dividerParams.topMargin = dp(5); dividerParams.bottomMargin = dp(5);
@@ -197,6 +215,7 @@ public final class MainActivity extends Activity {
         power.set("—", "Battery power", "Checking current + voltage");
         self.set("—", "Pocket Pulse overhead", "Waiting for first sample");
         LinearLayout footerRow = row();
+        footerPanel = footerRow;
         footerRow.addView(text("Pocket Pulse", 11, MUTED), new LinearLayout.LayoutParams(-2, -1));
         footer = text("Waiting for readings", 11, MUTED);
         footer.setGravity(Gravity.CENTER);
@@ -215,32 +234,88 @@ public final class MainActivity extends Activity {
         int width = root.getWidth() - root.getPaddingLeft() - root.getPaddingRight();
         if (width <= 0) return;
         float fontScale = Math.max(1f, getResources().getConfiguration().fontScale);
-        int nextColumns = width >= dp(560 * fontScale) ? 4 : width >= dp(290 * fontScale) ? 2 : 1;
+        boolean shortWindow = root.getHeight() - root.getPaddingTop() - root.getPaddingBottom() < dp(430 * fontScale);
+        int nextChromeHeight = dp(shortWindow ? 44 : 48);
+        if (chromeHeight != nextChromeHeight) {
+            chromeHeight = nextChromeHeight;
+            ViewGroup.LayoutParams header = headingRow.getLayoutParams(); header.height = chromeHeight; headingRow.setLayoutParams(header);
+            for (int i = 0; i < headingRow.getChildCount(); i++) {
+                View child = headingRow.getChildAt(i);
+                ViewGroup.LayoutParams params = child.getLayoutParams(); params.height = chromeHeight; child.setLayoutParams(params);
+            }
+            ViewGroup.LayoutParams footerParams = footerPanel.getLayoutParams(); footerParams.height = dp(shortWindow ? 30 : 34); footerPanel.setLayoutParams(footerParams);
+        }
         int viewport = ((View) grid.getParent()).getHeight();
         if (viewport <= 0) return;
-        int rows = (cards.length + nextColumns - 1) / nextColumns;
-        int rowSpace = viewport / rows - dp(10);
-        boolean nextCompact = preferences.getBoolean("compact", false) || rowSpace < dp(170 * fontScale);
-        int nextHeight = Math.max(dp((nextCompact ? 155 : 165) * fontScale), rowSpace);
-        if (columns == nextColumns && compact == nextCompact && arrangedCardHeight == nextHeight) return;
-        columns = nextColumns;
-        compact = nextCompact;
-        arrangedCardHeight = nextHeight;
+        float density = getResources().getDisplayMetrics().density;
+        boolean autoFit = preferences.getBoolean("autoFit", true);
+        boolean forceCompact = preferences.getBoolean("compact", false);
+        String geometry = width + ":" + viewport + ":" + density + ":" + fontScale + ":" + autoFit + ":" + forceCompact + ":" + showThermal + ":" + gpuCardMode;
+        if (geometry.equals(arrangedGeometry)) return;
+        boolean landscape = width > root.getHeight() - root.getPaddingTop() - root.getPaddingBottom();
+        int nextColumns = DashboardLayout.columns(width, density, fontScale, landscape, autoFit);
+        int[] minimumHeights = new int[4];
+        for (int profile = 0; profile < minimumHeights.length; profile++) {
+            applyCardProfile(profile);
+            int needed = 0;
+            for (Card card : cards) needed = Math.max(needed, card.requiredHeight(profile));
+            minimumHeights[profile] = needed;
+        }
+        // Preserve the existing full-size look on screens with enough space.
+        minimumHeights[0] = Math.max(minimumHeights[0], dp(170 * fontScale));
+        dashboardLayout = DashboardLayout.choose(width, viewport, density, nextColumns, autoFit, forceCompact, minimumHeights);
+        applyCardProfile(dashboardLayout.profile);
+        columns = dashboardLayout.columns;
+        compact = dashboardLayout.profile > 0;
+        arrangedCardHeight = dashboardLayout.cardHeight;
+        arrangedGeometry = geometry;
         // Remove before changing the column count: old GridLayout specs may exceed the new count.
         grid.removeAllViews();
         grid.setColumnCount(columns);
         for (int i = 0; i < cards.length; i++) {
             Card card = cards[i];
-            card.chart.setVisibility(card.hasChart && !compact ? View.VISIBLE : View.GONE);
-            card.value.setTextSize(card == self ? (compact ? 20 : 25) : (compact ? 25 : 31));
             GridLayout.LayoutParams params = new GridLayout.LayoutParams(GridLayout.spec(i / columns), GridLayout.spec(i % columns, 1f));
             params.width = 0;
-            params.height = nextHeight;
-            params.setMargins(i % columns == 0 ? 0 : dp(5), 0, i % columns == columns - 1 ? 0 : dp(5), dp(10));
+            params.height = arrangedCardHeight;
+            int gap = dashboardLayout.gap;
+            params.setMargins(i % columns == 0 ? 0 : gap / 2, 0,
+                    i % columns == columns - 1 ? 0 : gap - gap / 2,
+                    i / columns == dashboardLayout.rows - 1 ? 0 : gap);
             grid.addView(card, params);
         }
-        internalStorageView.number.setTextSize(compact ? 20 : 24);
-        sdStorageView.number.setTextSize(compact ? 20 : 24);
+        if (!dashboardLayout.scrolling) dashboardScroll.scrollTo(0, 0);
+        if (gpuCardMode != 0) renderGpuCard(last);
+    }
+
+    private void applyCardProfile(int profile) {
+        boolean dense = profile >= 2;
+        for (Card card : cards) {
+            card.setPadding(dp(dense ? 8 : 13), dp(profile == 3 ? 3 : dense ? 6 : 12), dp(dense ? 8 : 13), dp(profile == 3 ? 3 : dense ? 6 : 10));
+            card.value.setTextSize(card == self ? (profile == 0 ? 25 : profile == 1 ? 20 : 18) : (profile == 0 ? 31 : profile == 1 ? 25 : 22));
+            card.detail.setTextSize(dense ? 11 : 12);
+            card.note.setVisibility(profile == 3 ? View.GONE : View.VISIBLE);
+            card.chart.setVisibility(card.hasChart && (card != gpu || gpuCardMode == 0) && profile == 0 ? View.VISIBLE : View.GONE);
+            card.setClickable(dense); card.setFocusable(dense);
+        }
+        storageHint.setVisibility(profile == 3 ? View.VISIBLE : View.GONE);
+        internalStorageView.applyProfile(profile);
+        sdStorageView.applyProfile(profile);
+        LinearLayout.LayoutParams divider = (LinearLayout.LayoutParams) storageDivider.getLayoutParams();
+        divider.topMargin = dp(profile == 3 ? 1 : dense ? 2 : 5);
+        divider.bottomMargin = divider.topMargin;
+        storageDivider.setLayoutParams(divider);
+        optional.value.setVisibility(showThermal ? View.VISIBLE : View.GONE);
+        optional.detail.setVisibility(showThermal ? View.VISIBLE : View.GONE);
+        optional.note.setVisibility(showThermal && profile != 3 ? View.VISIBLE : View.GONE);
+    }
+
+    private void showReading(Card card) {
+        String message;
+        if (card == optional && !showThermal) {
+            message = last == null ? "Waiting for readings" : "Internal: " + storageSummary(last.internalStorage) + "\n\nmicroSD: "
+                    + (last.sdStorage == null ? last.sdStatus : storageSummary(last.sdStorage));
+        } else message = card.value.getText() + "\n" + card.detail.getText() + "\n\n" + card.note.getText();
+        new AlertDialog.Builder(this).setTitle(card.title.getText()).setMessage(message).setPositiveButton("Close", null).show();
     }
 
     @Override protected void onStart() {
@@ -315,7 +390,7 @@ public final class MainActivity extends Activity {
     private void render(TelemetrySampler.Sample s) {
         last = s;
         cpu.set(percent(s.cpu), s.cpuClock, s.cpuReadable ? "System load · all cores" : "Usage restricted by Android");
-        gpu.set(percent(s.gpu), s.gpuClock, s.gpuReadable ? "Device GPU activity" : "Usage not exposed by device");
+        renderGpuCard(s);
         ram.set(percent(s.ram), f("%.1f / %.1f GiB used", (s.totalRam - s.availableRam) / 1073741824.0, s.totalRam / 1073741824.0), f("%.1f GiB available", s.availableRam / 1073741824.0));
         battery.set(s.battery >= 0 ? s.battery + "%" : "—", Float.isFinite(s.batteryF) ? f("%.1f °F · battery", s.batteryF) : "Temperature unavailable", s.charging ? "Charging / external power" : "On battery");
         renderOptional(s);
@@ -326,8 +401,27 @@ public final class MainActivity extends Activity {
         power.title.setText(Float.isFinite(s.batteryWatts) && s.batteryWatts > 0 ? "BATTERY CHARGE" : "BATTERY DRAW");
         updateVolumeButton();
         self.set(Float.isFinite(s.selfCpu) ? f("%.1f%% CPU", s.selfCpu) : "Warming up", f("%.1f MiB RAM · PSS", s.appPssKb / 1024.0), "CPU relative to one core");
-        cpu.chart.add(s.cpu); gpu.chart.add(s.gpu); ram.chart.add(s.ram);
+        cpu.chart.add(s.cpu); if (gpuCardMode == 0) gpu.chart.add(s.gpu); ram.chart.add(s.ram);
         footer.setText(f("%ds refresh · %.1f ms to collect · 90-sample history", interval / 1000, s.collectionMs));
+    }
+
+    private void renderGpuCard(TelemetrySampler.Sample sample) {
+        if (gpuCardMode == 1) {
+            Display display = getWindowManager().getDefaultDisplay();
+            float hz = display.getRefreshRate();
+            gpu.title.setText("DISPLAY");
+            gpu.set(hz > 0 && Float.isFinite(hz) ? f("%.0f Hz", hz) : "—",
+                    f("%d × %d px window", root.getWidth(), root.getHeight()), "Screen refresh · not game FPS");
+        } else if (gpuCardMode == 2) {
+            long minutes = SystemClock.elapsedRealtime() / 60000;
+            gpu.title.setText("DEVICE UPTIME");
+            gpu.set(minutes >= 1440 ? f("%dd %dh", minutes / 1440, minutes / 60 % 24)
+                    : minutes >= 60 ? f("%dh %dm", minutes / 60, minutes % 60) : f("%dm", minutes),
+                    "Since device restart", "Includes sleep time");
+        } else {
+            gpu.title.setText("GPU");
+            if (sample != null) gpu.set(percent(sample.gpu), sample.gpuClock, sample.gpuReadable ? "Device GPU activity" : "Usage not exposed by device");
+        }
     }
 
     private void renderOptional(TelemetrySampler.Sample s) {
@@ -348,6 +442,8 @@ public final class MainActivity extends Activity {
         optional.note.setVisibility(showThermal ? View.VISIBLE : View.GONE);
         storageBody.setVisibility(showThermal ? View.GONE : View.VISIBLE);
         if (last != null) renderOptional(last);
+        arrangedGeometry = null;
+        if (dashboardScroll != null) dashboardScroll.post(this::arrangeCards);
     }
 
     private void updateControls() {
@@ -410,8 +506,8 @@ public final class MainActivity extends Activity {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(20), dp(4), dp(20), dp(8));
-        String[] labels = {"Keep this screen awake", "Dim this screen to 25%", "Compact cards"};
-        boolean[] checked = {keepAwake, dim, preferences.getBoolean("compact", false)};
+        String[] labels = {"Keep this screen awake", "Dim this screen to 25%", "Compact cards", "Auto-fit dashboard"};
+        boolean[] checked = {keepAwake, dim, preferences.getBoolean("compact", false), preferences.getBoolean("autoFit", true)};
         for (int i = 0; i < labels.length; i++) {
             final int setting = i;
             CheckBox check = new CheckBox(this);
@@ -420,7 +516,8 @@ public final class MainActivity extends Activity {
             check.setOnCheckedChangeListener((view, value) -> {
                 if (setting == 0) { keepAwake = value; preferences.edit().putBoolean("awake", value).apply(); }
                 if (setting == 1) { dim = value; preferences.edit().putBoolean("dim", value).apply(); }
-                if (setting == 2) { preferences.edit().putBoolean("compact", value).apply(); columns = -1; arrangeCards(); }
+                if (setting == 2) { preferences.edit().putBoolean("compact", value).apply(); arrangedGeometry = null; arrangeCards(); }
+                if (setting == 3) { preferences.edit().putBoolean("autoFit", value).apply(); arrangedGeometry = null; arrangeCards(); }
                 applyScreenOptions();
             });
             panel.addView(check);
@@ -435,6 +532,24 @@ public final class MainActivity extends Activity {
                 showThermal = position == 1;
                 preferences.edit().putBoolean("thermalCard", showThermal).apply();
                 updateOptionalCard();
+            }
+            @Override public void onNothingSelected(AdapterView<?> parent) {}
+        });
+        panel.addView(text("GPU card", 12, MUTED));
+        Spinner gpuChoice = new Spinner(this);
+        gpuChoice.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
+                new String[]{"GPU activity", "Display info", "Device uptime"}));
+        gpuChoice.setSelection(gpuCardMode);
+        panel.addView(gpuChoice, new LinearLayout.LayoutParams(-1, dp(44)));
+        gpuChoice.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (position == gpuCardMode) return;
+                gpuCardMode = position;
+                preferences.edit().putInt("gpuCard", gpuCardMode).apply();
+                gpu.chart.clear();
+                renderGpuCard(last);
+                arrangedGeometry = null;
+                dashboardScroll.post(MainActivity.this::arrangeCards);
             }
             @Override public void onNothingSelected(AdapterView<?> parent) {}
         });
@@ -469,7 +584,7 @@ public final class MainActivity extends Activity {
 
     private String versionName() {
         try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionName; }
-        catch (Exception ignored) { return "0.2.0"; }
+        catch (Exception ignored) { return "0.2.1"; }
     }
 
     private void checkForUpdates() {
@@ -548,6 +663,8 @@ public final class MainActivity extends Activity {
             "CPU and GPU: system-wide readings only where firmware permits them. A dash means unavailable or waiting for a valid sample; clocks are not utilization.\n\n" +
             "RAM: total minus Android’s available memory. Includes the system, games, apps, and some cache; it is not a game’s RAM allocation.\n\n" +
             "All temperatures use Fahrenheit. Battery °F is not CPU/GPU temperature. Optional thermals show Android’s reported severity, not a chip thermometer. ‘None’ means no severity reported; firmware support varies.\n\n" +
+            "Auto-fit sizes cards to the usable window, accounting for display density, system bars and text size. Short windows hide charts and use tighter cards. Tap a tight card for its full reading. Extremely small windows or large accessibility fonts retain scrolling so text stays readable.\n\n" +
+            "GPU card can instead show this display’s refresh rate and window resolution, or device uptime since restart (including sleep). Display refresh rate is not a game’s FPS. The card choice is saved.\n\n" +
             "Storage: free and total usable space for internal storage and a mounted microSD. Updated every 15 seconds. Adopted storage can be included in internal space.\n\n" +
             "Fan speed: actual RPM only when readable; not fan mode or PWM. Battery power is current × voltage: net charging/discharging power at the battery, not wall power or a game’s individual power use.\n\n" +
             "This app: CPU relative to one core, and process PSS sampled every 15 seconds. Collection time covers telemetry reads, not drawing or total game impact.\n\n" +
@@ -563,6 +680,11 @@ public final class MainActivity extends Activity {
     private String deviceReport() {
         String report = "Pocket Pulse " + versionName() + "\nDevice: " + Build.MANUFACTURER + " " + Build.MODEL + "\nAndroid: " + Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")\nRefresh: " + interval + " ms\n";
         DisplayManager manager = (DisplayManager) getSystemService(DISPLAY_SERVICE);
+        report += "Window: " + root.getWidth() + " x " + root.getHeight() + " px\nDensity: " + getResources().getDisplayMetrics().densityDpi
+                + " dpi\nFont scale: " + getResources().getConfiguration().fontScale + "\nDashboard viewport: " + dashboardScroll.getWidth() + " x " + dashboardScroll.getHeight() + " px\n";
+        if (dashboardLayout != null) report += "Layout: " + dashboardLayout.columns + " columns; profile " + dashboardLayout.profile
+                + "; card height " + dashboardLayout.cardHeight + " px; scrolling " + dashboardLayout.scrolling + "\n";
+        report += "Auto-fit: " + preferences.getBoolean("autoFit", true) + "\nGPU card mode: " + gpuCardMode + "\n";
         for (Display display : manager.getDisplays()) report += "Display " + display.getDisplayId() + ": " + display.getName() + "\n";
         if (last != null) report += "CPU source: " + last.cpuSource + "\nCPU load: " + percent(last.cpu) + "\nCPU clock: " + last.cpuClock + "\nGPU source: " + last.gpuSource + "\nGPU load: " + percent(last.gpu) + "\nGPU clock: " + last.gpuClock + "\nRAM used: " + percent(last.ram) + "\nThermal status: " + last.thermal + "\nApp PSS: " + last.appPssKb + " KiB\nApp CPU: " + last.selfCpu + "% of one core\n";
         if (last != null) report += "Battery temperature: " + (Float.isFinite(last.batteryF) ? f("%.1f °F", last.batteryF) : "Unavailable")
@@ -574,6 +696,10 @@ public final class MainActivity extends Activity {
 
     private String storageReport(TelemetrySampler.StorageReading reading) {
         return reading == null ? "Unavailable" : f("%.1f / %.1f GiB free; source: %s", reading.available / 1073741824.0, reading.total / 1073741824.0, reading.source);
+    }
+
+    private String storageSummary(TelemetrySampler.StorageReading reading) {
+        return reading == null ? "Unavailable" : f("%.1f GiB free of %.1f GiB", reading.available / 1073741824.0, reading.total / 1073741824.0);
     }
 
     private void updateDeviceLabel() {
@@ -593,6 +719,7 @@ public final class MainActivity extends Activity {
             title = text(label, 10, color);
             title.setLetterSpacing(.09f);
             title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+            title.setSingleLine(true);
             addView(title);
             value = text("—", 31, color);
             value.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
@@ -612,29 +739,63 @@ public final class MainActivity extends Activity {
             chartParams.topMargin = dp(8);
             addView(chart, chartParams);
             chart.setVisibility(hasChart ? View.VISIBLE : View.GONE);
+            setOnClickListener(v -> showReading(this));
         }
         void set(String number, String detailText, String noteText) {
             value.setText(number); detail.setText(detailText); note.setText(noteText);
         }
+        int requiredHeight(int profile) {
+            int height = getPaddingTop() + getPaddingBottom() + title.getLineHeight();
+            if (this == optional && !showThermal) {
+                LinearLayout.LayoutParams divider = (LinearLayout.LayoutParams) storageDivider.getLayoutParams();
+                return height + internalStorageView.requiredHeight() + sdStorageView.requiredHeight()
+                        + divider.height + divider.topMargin + divider.bottomMargin
+                        + (profile == 3 ? storageHint.getLineHeight() : 0) + dp(2);
+            }
+            height += value.getLineHeight() + detail.getLineHeight() * 2;
+            if (profile != 3) height += note.getLineHeight() * 2 + dp(3);
+            if (hasChart && (this != gpu || gpuCardMode == 0) && profile == 0) height += dp(24 + 8);
+            return height + dp(2);
+        }
     }
 
     private final class StorageView extends LinearLayout {
-        final TextView number, capacity;
+        final TextView label, number, capacity;
+        private boolean minimal;
+        private TelemetrySampler.StorageReading reading;
+        private String unavailable = "Waiting for reading";
         StorageView(String label) {
             super(MainActivity.this);
             setOrientation(VERTICAL);
-            addView(text(label, 11, TEXT));
+            this.label = text(label, 11, TEXT);
+            addView(this.label);
             number = text("—", 24, 0xFF95C4F2);
             number.setSingleLine(true);
             number.setEllipsize(android.text.TextUtils.TruncateAt.END);
             addView(number);
             capacity = text("Waiting for reading", 10, MUTED);
             capacity.setMaxLines(2);
+            capacity.setEllipsize(android.text.TextUtils.TruncateAt.END);
             addView(capacity);
         }
         void set(TelemetrySampler.StorageReading reading, String unavailable) {
-            number.setText(reading == null ? "—" : f("%.0f GiB", reading.available / 1073741824.0));
+            this.reading = reading; this.unavailable = unavailable;
+            number.setText(reading == null ? (minimal && unavailable.equals("No microSD detected") ? "Not detected" : "—")
+                    : minimal ? f("%.0f / %.0f GiB", reading.available / 1073741824.0, reading.total / 1073741824.0)
+                    : f("%.0f GiB", reading.available / 1073741824.0));
             capacity.setText(reading == null ? unavailable : f("free of %.0f GiB", reading.total / 1073741824.0));
+            setContentDescription(label.getText() + ": " + (reading == null ? unavailable : f("%.1f GiB free of %.1f GiB", reading.available / 1073741824.0, reading.total / 1073741824.0)));
+        }
+        void applyProfile(int profile) {
+            minimal = profile == 3;
+            number.setTextSize(minimal ? 14 : profile == 2 ? 18 : profile == 1 ? 20 : 24);
+            label.setTextSize(profile >= 2 ? 10 : 11);
+            capacity.setVisibility(minimal ? View.GONE : View.VISIBLE);
+            capacity.setMaxLines(profile >= 2 ? 1 : 2);
+            set(reading, unavailable);
+        }
+        int requiredHeight() {
+            return label.getLineHeight() + number.getLineHeight() + (minimal ? 0 : capacity.getLineHeight() * capacity.getMaxLines());
         }
     }
 

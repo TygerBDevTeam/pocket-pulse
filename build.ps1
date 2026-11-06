@@ -83,6 +83,8 @@ Run-Checked $javac @('-encoding','UTF-8','-d',$testClasses,(Join-Path $source 'j
 Run-Checked $java @('-cp',$testClasses,'dev.pocketpulse.monitor.MetricMathTest')
 Run-Checked $javac @('-encoding','UTF-8','-d',$testClasses,(Join-Path $source 'java\dev\pocketpulse\monitor\ReleaseVersion.java'),(Join-Path $project 'tests\ReleaseVersionTest.java'))
 Run-Checked $java @('-cp',$testClasses,'dev.pocketpulse.monitor.ReleaseVersionTest')
+Run-Checked $javac @('-encoding','UTF-8','-d',$testClasses,(Join-Path $source 'java\dev\pocketpulse\monitor\DashboardLayout.java'),(Join-Path $project 'tests\DashboardLayoutTest.java'))
+Run-Checked $java @('-cp',$testClasses,'dev.pocketpulse.monitor.DashboardLayoutTest')
 $hash = (Get-FileHash -LiteralPath $apk -Algorithm SHA256).Hash.ToLowerInvariant()
 [System.IO.File]::WriteAllText((Join-Path $project 'dist\SHA256SUMS.txt'), ($hash + '  ' + $apkName + [Environment]::NewLine))
 Write-Output ('Built: ' + $apk)

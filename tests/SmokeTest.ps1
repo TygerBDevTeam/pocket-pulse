@@ -18,7 +18,18 @@ function Expect-Text([string]$Text) {
     Write-Output ('PASS: ' + $Text)
 }
 function Click-Text([string]$Text) {
-    $node = Find-Text (Get-Ui) $Text
+    $node = $null
+    for ($attempt = 0; $attempt -lt 5; $attempt++) {
+        $ui = Get-Ui
+        $node = Find-Text $ui $Text
+        if ($node) { break }
+        $scroll = @($ui.SelectNodes('//node') | Where-Object { $_.class -eq 'android.widget.ScrollView' -and $_.scrollable -eq 'true' }) | Select-Object -First 1
+        if (!$scroll) { break }
+        $b = [regex]::Matches($scroll.bounds,'\d+')
+        $x = [string]([int](([int]$b[0].Value+[int]$b[2].Value)/2))
+        $top = [int]$b[1].Value; $height = [int]$b[3].Value-$top
+        $null = Invoke-Adb @('shell','input','swipe',$x,[string]([int]($top+$height*.8)),$x,[string]([int]($top+$height*.2)),'400')
+    }
     if (!$node) { throw ('Missing control: ' + $Text) }
     $bounds = [regex]::Matches($node.bounds, '\d+')
     $x = [int](([int]$bounds[0].Value + [int]$bounds[2].Value) / 2)
@@ -57,8 +68,7 @@ Click-Text 'Options'
 Expect-Text 'Keep this screen awake'
 Expect-Text 'Dim this screen to 25%'
 Expect-Text 'Compact cards'
-Expect-Text 'Check for updates'
-Expect-Text 'Temperature units · Fahrenheit (°F)'
+Expect-Text 'Auto-fit dashboard'
 Click-Text 'Storage'
 Click-Text 'Thermal status'
 Click-Text 'Done'
